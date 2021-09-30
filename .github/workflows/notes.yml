@@ -1,13 +1,8 @@
 name: Render and Deploy Docs
 
-on:
-  workflow_dispatch:
-  push:
-    branches:
-      - main
+on: [push]
 
 jobs:
-
   build:
     name: Render and deploy protocol and API docs
     timeout-minutes: 30
@@ -21,6 +16,8 @@ jobs:
           profile: minimal
           toolchain: stable
           override: true
+
+      # Install dependencies and credentials
       - name: Load Rust caching
         uses: Swatinem/rust-cache@v1
       - name: Load get-version action to grab version component of deployment path
@@ -29,7 +26,14 @@ jobs:
       - name: Install mdbook
         run: |
           cargo install mdbook mdbook-katex mdbook-mermaid
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v1
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.S3_REGION }}
 
+      # Build artifacts
       - name: Build API docs
         run: |
           cargo doc --no-deps -p decaf377
@@ -38,31 +42,16 @@ jobs:
           # This is useful until ABCI changes are merged upstream
           # https://github.com/informalsystems/tendermint-rs/pull/862
           cargo doc --no-deps -p tendermint
-      - name: Move API docs to subdirectory
-        run: |
-          if [ -d "firebase-tmp" ]; then rm -rf firebase-tmp; fi
-          mkdir firebase-tmp
-          mv target/doc firebase-tmp/${{ steps.get_version.outputs.version }}
-      - name: Deploy API docs to firebase
-        uses: w9jds/firebase-action@v2.0.0
-        with:
-          args: deploy
-        env:
-          FIREBASE_TOKEN: ${{ secrets.FIREBASE_TOKEN }}
-          PROJECT_ID: penumbra-doc
-
       - name: Build protocol docs
         run: |
           mdbook build
-      - name: Move protocol docs to subdirectory
+
+      # Deploy to S3
+      - name: Move docs to subdirectories
         run: |
-          if [ -d "firebase-tmp" ]; then rm -rf firebase-tmp; fi
-          mkdir firebase-tmp
-          mv book firebase-tmp/${{ steps.get_version.outputs.version }}
-      - name: Deploy notes to firebase
-        uses: w9jds/firebase-action@v2.0.0
-        with:
-          args: deploy
-        env:
-          FIREBASE_TOKEN: ${{ secrets.FIREBASE_TOKEN }}
-          PROJECT_ID: penumbra-e3789
+          if [ -d "s3-tmp" ]; then rm -rf s3-tmp; fi
+          mkdir s3-tmp
+          mv target/doc s3-tmp/api
+          mv book s3-tmp/book
+      - name: Sync to S3
+        run: aws s3 sync s3-temp/* s3://${{ secrets.S3_BUCKET_NAME }}/${{ env.GITHUB_REF }} --delete
